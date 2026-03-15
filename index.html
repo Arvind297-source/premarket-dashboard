@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Pre-Market FII Intelligence</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --bg: #05080f;
+  --surface: #0a1020;
+  --surface2: #0f1a2e;
+  --surface3: #131f33;
+  --border: #162035;
+  --border2: #1e2f4a;
+  --bull: #00e5a0;
+  --bear: #ff4060;
+  --neutral: #ffb830;
+  --accent: #4f8fff;
+  --text: #d0dcea;
+  --dim: #6b859e;
+  --muted: #2d4058;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Syne', sans-serif;
+  min-height: 100vh;
+}
+.bg-grid {
+  position: fixed; inset: 0; z-index: 0;
+  background-image:
+    linear-gradient(rgba(79,143,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79,143,255,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+}
+.bg-glow1 { position:fixed;top:-200px;left:-200px;width:600px;height:600px;background:radial-gradient(circle,rgba(79,143,255,0.06) 0%,transparent 70%);pointer-events:none;z-index:0; }
+.bg-glow2 { position:fixed;bottom:-200px;right:-200px;width:600px;height:600px;background:radial-gradient(circle,rgba(0,229,160,0.04) 0%,transparent 70%);pointer-events:none;z-index:0; }
+
+.wrap { position:relative;z-index:1;max-width:1000px;margin:0 auto;padding:28px 24px; }
+
+/* SETUP SCREEN */
+#setup-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.setup-card {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 16px;
+  padding: 40px;
+  max-width: 520px;
+  width: 100%;
+}
+.setup-logo { font-size: 40px; margin-bottom: 16px; text-align: center; }
+.setup-title { font-size: 24px; font-weight: 800; color: #fff; text-align: center; margin-bottom: 6px; letter-spacing: -0.5px; }
+.setup-sub { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--dim); text-align: center; letter-spacing: 1px; margin-bottom: 28px; }
+.setup-step {
+  display: flex; gap: 14px; align-items: flex-start;
+  background: var(--surface2); border-radius: 10px;
+  padding: 14px; margin-bottom: 10px;
+  border: 1px solid var(--border);
+}
+.step-num {
+  width: 26px; height: 26px; border-radius: 6px;
+  background: rgba(79,143,255,0.2); color: var(--accent);
+  font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.step-text { font-size: 13px; line-height: 1.6; color: var(--text); }
+.step-text a { color: var(--accent); text-decoration: none; }
+.step-text a:hover { text-decoration: underline; }
+.step-text code {
+  font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+  background: rgba(79,143,255,0.1); padding: 1px 6px; border-radius: 3px;
+  color: var(--accent);
+}
+
+.api-field { margin: 20px 0; }
+.api-label { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--dim); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; display: block; }
+.api-input-row { display: flex; gap: 8px; }
+.api-input {
+  flex: 1; background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 8px; color: var(--text);
+  font-family: 'IBM Plex Mono', monospace; font-size: 13px;
+  padding: 10px 14px; outline: none;
+  transition: border-color 0.2s;
+}
+.api-input:focus { border-color: var(--accent); }
+.api-input::placeholder { color: var(--muted); }
+.toggle-vis {
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 8px; padding: 10px 12px;
+  color: var(--dim); cursor: pointer; font-size: 14px;
+  transition: all 0.15s;
+}
+.toggle-vis:hover { border-color: var(--accent); color: var(--accent); }
+
+.remember-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 20px; font-size: 12px; color: var(--dim);
+  cursor: pointer;
+}
+.remember-row input { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+
+.start-btn {
+  width: 100%; padding: 15px; background: linear-gradient(135deg,#1b4fd8,#4f8fff);
+  border: none; border-radius: 10px; color: #fff;
+  font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700;
+  cursor: pointer; transition: all 0.2s; letter-spacing: 0.3px;
+  box-shadow: 0 4px 20px rgba(79,143,255,0.3);
+}
+.start-btn:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(79,143,255,0.4); }
+.start-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+.privacy-note {
+  font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+  color: var(--muted); text-align: center; margin-top: 14px; line-height: 1.7;
+}
+.privacy-note span { color: var(--bull); }
+
+/* MAIN DASHBOARD */
+#dashboard { display: none; }
+
+.header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  margin-bottom: 28px;
+}
+.header-left h1 { font-size: 24px; font-weight: 800; color: #fff; letter-spacing: -0.5px; line-height: 1.1; }
+.header-left h1 span { color: var(--accent); }
+.header-left p { font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--dim); margin-top:5px; letter-spacing:1.5px; }
+.header-right { text-align: right; }
+#live-clock { font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--accent); background:rgba(79,143,255,0.08); border:1px solid rgba(79,143,255,0.2); padding:6px 14px; border-radius:6px; }
+#live-date { font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--dim); margin-top:4px; }
+.change-key-btn {
+  font-family:'IBM Plex Mono',monospace; font-size:10px;
+  padding:4px 10px; background:transparent;
+  border:1px solid var(--border2); border-radius:5px;
+  color:var(--muted); cursor:pointer; margin-top:6px;
+  transition: all 0.15s;
+}
+.change-key-btn:hover { border-color:var(--dim); color:var(--dim); }
+
+.info-banner {
+  background:rgba(79,143,255,0.06); border:1px solid rgba(79,143,255,0.18);
+  border-radius:10px; padding:14px 16px; margin-bottom:20px;
+  font-size:12px; color:var(--dim); line-height:1.7;
+}
+.info-banner strong { color:var(--accent); }
+
+.fetch-btn {
+  width:100%; padding:18px; background:linear-gradient(135deg,#1b4fd8,#4f8fff);
+  border:none; border-radius:12px; color:#fff;
+  font-family:'Syne',sans-serif; font-size:16px; font-weight:700;
+  cursor:pointer; letter-spacing:0.5px; transition:all 0.25s;
+  position:relative; overflow:hidden; margin-bottom:24px;
+  display:flex; align-items:center; justify-content:center; gap:10px;
+  box-shadow:0 4px 30px rgba(79,143,255,0.25);
+}
+.fetch-btn:hover { transform:translateY(-2px); box-shadow:0 10px 40px rgba(79,143,255,0.4); }
+.fetch-btn:disabled { opacity:0.5; cursor:not-allowed; transform:none; box-shadow:none; }
+.fetch-btn .shimmer { position:absolute;top:0;left:-100%;width:100%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.12),transparent);animation:shimmer 2s infinite; }
+@keyframes shimmer { to{left:200%;} }
+
+.progress-box { background:var(--surface);border:1px solid var(--border2);border-radius:10px;padding:16px 18px;margin-bottom:20px;display:none; }
+.progress-title { font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--dim);margin-bottom:12px;text-transform:uppercase; }
+.log-entries { display:flex;flex-direction:column;gap:6px; }
+.log-entry { display:flex;align-items:center;gap:10px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--dim);transition:all 0.3s; }
+.log-entry.active { color:var(--accent); }
+.log-entry.done { color:var(--bull); }
+.log-entry.error { color:var(--bear); }
+.log-dot { width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:all 0.3s; }
+.log-entry.active .log-dot { background:var(--accent);box-shadow:0 0 8px var(--accent);animation:pulse 1s infinite; }
+.log-entry.done .log-dot { background:var(--bull);box-shadow:0 0 6px var(--bull); }
+.log-entry.error .log-dot { background:var(--bear); }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.4} }
+
+#result { display:none; }
+
+.verdict-hero { border-radius:14px;padding:24px;margin-bottom:16px;position:relative;overflow:hidden; }
+.verdict-hero::before { content:'';position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,0.03) 0%,transparent 60%); }
+.vh-bear { background:linear-gradient(135deg,rgba(255,64,96,0.15),rgba(255,64,96,0.05));border:1px solid rgba(255,64,96,0.3); }
+.vh-bull { background:linear-gradient(135deg,rgba(0,229,160,0.15),rgba(0,229,160,0.05));border:1px solid rgba(0,229,160,0.3); }
+.vh-neutral,.vh-cautious { background:linear-gradient(135deg,rgba(255,184,48,0.12),rgba(255,184,48,0.03));border:1px solid rgba(255,184,48,0.3); }
+.verdict-top { display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px; }
+.verdict-label { font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px; }
+.verdict-word { font-size:36px;font-weight:800;letter-spacing:-1px;line-height:1; }
+.verdict-word.bear { color:var(--bear);text-shadow:0 0 30px rgba(255,64,96,0.4); }
+.verdict-word.bull { color:var(--bull);text-shadow:0 0 30px rgba(0,229,160,0.4); }
+.verdict-word.neutral,.verdict-word.cautious { color:var(--neutral); }
+.conviction-box { text-align:right;font-family:'IBM Plex Mono',monospace; }
+.conv-label { font-size:9px;color:var(--dim);letter-spacing:1px;text-transform:uppercase; }
+.conv-value { font-size:18px;font-weight:700;margin-top:2px; }
+.conv-high { color:var(--bear); } .conv-medium { color:var(--neutral); } .conv-low { color:var(--accent); }
+.bias-text { font-size:15px;font-weight:600;color:#fff;line-height:1.4;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08); }
+
+.scoreboard { display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px; }
+.score-card { background:var(--surface);border-radius:10px;padding:14px 12px;text-align:center;border:1px solid var(--border);transition:transform 0.2s; }
+.score-card:hover { transform:translateY(-2px); }
+.score-card.bull { border-color:rgba(0,229,160,0.25);background:rgba(0,229,160,0.04); }
+.score-card.bear { border-color:rgba(255,64,96,0.25);background:rgba(255,64,96,0.04); }
+.score-card.neutral { border-color:rgba(255,184,48,0.25);background:rgba(255,184,48,0.04); }
+.score-icon { font-size:22px;margin-bottom:6px; }
+.score-name { font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:5px; }
+.score-val { font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:700; }
+.score-val.bull { color:var(--bull); } .score-val.bear { color:var(--bear); } .score-val.neutral { color:var(--neutral); }
+
+.numbers-row { display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px; }
+.num-card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px; }
+.num-label { font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:5px; }
+.num-value { font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:700; }
+.num-sub { font-size:10px;color:var(--dim);margin-top:3px; }
+
+.analysis-grid { display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px; }
+.a-card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px; }
+.a-title { font-family:'IBM Plex Mono',monospace;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--dim);margin-bottom:10px;display:flex;align-items:center;gap:8px; }
+.a-title::after { content:'';flex:1;height:1px;background:var(--border); }
+.a-body { font-size:13px;line-height:1.75;color:var(--text); }
+
+.risk-box { background:rgba(255,64,96,0.06);border:1px solid rgba(255,64,96,0.2);border-radius:10px;padding:16px;margin-bottom:12px;display:flex;gap:12px;align-items:flex-start; }
+.risk-icon { font-size:24px;flex-shrink:0; }
+.risk-title { font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--bear);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:5px; }
+.risk-text { font-size:13px;line-height:1.6; }
+
+.actions-card { background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px; }
+.action-row { display:flex;gap:12px;align-items:flex-start;padding:9px 0;border-bottom:1px solid rgba(22,32,53,0.8);font-size:13px;line-height:1.5; }
+.action-row:last-child { border-bottom:none;padding-bottom:0; }
+.action-num { font-family:'IBM Plex Mono',monospace;font-size:10px;font-weight:700;width:22px;height:22px;border-radius:5px;background:rgba(79,143,255,0.15);color:var(--accent);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px; }
+
+.sources-row { display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px; }
+.source-chip { font-family:'IBM Plex Mono',monospace;font-size:10px;padding:4px 10px;border-radius:20px;background:var(--surface2);border:1px solid var(--border2);color:var(--dim);display:flex;align-items:center;gap:5px; }
+.sdot { width:5px;height:5px;border-radius:50%; }
+.sdot-done { background:var(--bull);box-shadow:0 0 5px var(--bull); }
+
+.refresh-row { display:flex;justify-content:space-between;align-items:center;margin-bottom:14px; }
+.refresh-btn { font-family:'IBM Plex Mono',monospace;font-size:11px;padding:6px 14px;background:transparent;border:1px solid var(--border2);border-radius:6px;color:var(--dim);cursor:pointer;transition:all 0.15s; }
+.refresh-btn:hover { border-color:var(--accent);color:var(--accent); }
+.last-updated { font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted); }
+
+.disclaimer { text-align:center;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted);padding:16px;border-top:1px solid var(--border);margin-top:8px; }
+
+::-webkit-scrollbar { width:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--border2);border-radius:2px; }
+</style>
+</head>
+<body>
+<div class="bg-grid"></div>
+<div class="bg-glow1"></div>
+<div class="bg-glow2"></div>
+
+<!-- ═══════════════════ SETUP SCREEN ═══════════════════ -->
+<div id="setup-screen">
+  <div class="setup-card">
+    <div class="setup-logo">⚡</div>
+    <div class="setup-title">Pre-Market FII Intelligence</div>
+    <div class="setup-sub">// ONE-TIME SETUP · 2 MINUTES</div>
+
+    <div class="setup-step">
+      <div class="step-num">1</div>
+      <div class="step-text">
+        Go to <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a> and sign up for a free account (no credit card needed to start).
+      </div>
+    </div>
+    <div class="setup-step">
+      <div class="step-num">2</div>
+      <div class="step-text">
+        Click <strong style="color:#fff">API Keys</strong> in the left sidebar → <strong style="color:#fff">Create Key</strong> → copy the key that starts with <code>sk-ant-...</code>
+      </div>
+    </div>
+    <div class="setup-step">
+      <div class="step-num">3</div>
+      <div class="step-text">
+        Paste your API key below. It will be saved in your browser and never sent anywhere except directly to Anthropic.
+      </div>
+    </div>
+
+    <div class="api-field">
+      <label class="api-label">Your Anthropic API Key</label>
+      <div class="api-input-row">
+        <input type="password" class="api-input" id="api-key-input" placeholder="sk-ant-api03-..." />
+        <button class="toggle-vis" onclick="toggleVis()" id="vis-btn">👁</button>
+      </div>
+    </div>
+
+    <label class="remember-row">
+      <input type="checkbox" id="remember-key" checked/>
+      Remember this key in my browser (localStorage)
+    </label>
+
+    <button class="start-btn" onclick="saveAndStart()" id="start-btn">
+      ✓ Save & Open Dashboard
+    </button>
+
+    <div class="privacy-note">
+      🔒 Your API key is stored <span>only in your browser</span> and sent directly to<br/>
+      api.anthropic.com — never to any third party server.
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ MAIN DASHBOARD ═══════════════════ -->
+<div id="dashboard">
+  <div class="wrap">
+
+    <div class="header">
+      <div class="header-left">
+        <h1>Pre-Market<br/><span>FII Intelligence</span></h1>
+        <p>// AUTO-FETCH · AI ANALYSIS · NSE · CDSL · GLOBAL</p>
+      </div>
+      <div class="header-right">
+        <div id="live-clock">--:--:--</div>
+        <div id="live-date"></div>
+        <button class="change-key-btn" onclick="changeKey()">⚙ Change API Key</button>
+      </div>
+    </div>
+
+    <div class="info-banner">
+      ⚡ <strong>One-click analysis.</strong> Hit the button below — Claude will automatically search for today's FII cash data, derivative positions, India VIX, PCR, and global cues, then generate your pre-market outlook. Best used <strong>between 8:00 AM – 9:10 AM IST</strong> before the market opens.
+    </div>
+
+    <button class="fetch-btn" id="fetch-btn" onclick="runAnalysis()">
+      <div class="shimmer"></div>
+      <span>🔍</span>
+      <span>FETCH DATA & GENERATE PRE-MARKET ANALYSIS</span>
+    </button>
+
+    <div class="progress-box" id="progress-box">
+      <div class="progress-title">⚙ Fetching & Analyzing</div>
+      <div class="log-entries" id="log-entries"></div>
+    </div>
+
+    <div id="result"></div>
+
+  </div>
+</div>
+
+<script>
+// ─── CLOCK ───
+function tick() {
+  const ist = new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
+  const p = n => String(n).padStart(2,'0');
+  const clk = document.getElementById('live-clock');
+  const dt = document.getElementById('live-date');
+  if (clk) clk.textContent = `${p(ist.getHours())}:${p(ist.getMinutes())}:${p(ist.getSeconds())} IST`;
+  if (dt) dt.textContent = ist.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'short',year:'numeric'});
+}
+setInterval(tick,1000); tick();
+
+// ─── API KEY MANAGEMENT ───
+function toggleVis() {
+  const inp = document.getElementById('api-key-input');
+  const btn = document.getElementById('vis-btn');
+  if (inp.type === 'password') { inp.type='text'; btn.textContent='🙈'; }
+  else { inp.type='password'; btn.textContent='👁'; }
+}
+
+function saveAndStart() {
+  const key = document.getElementById('api-key-input').value.trim();
+  if (!key || !key.startsWith('sk-ant')) {
+    alert('Please enter a valid Anthropic API key starting with sk-ant-...');
+    return;
+  }
+  if (document.getElementById('remember-key').checked) {
+    localStorage.setItem('fii_api_key', key);
+  } else {
+    sessionStorage.setItem('fii_api_key', key);
+  }
+  showDashboard();
+}
+
+function getKey() {
+  return localStorage.getItem('fii_api_key') || sessionStorage.getItem('fii_api_key') || '';
+}
+
+function changeKey() {
+  localStorage.removeItem('fii_api_key');
+  sessionStorage.removeItem('fii_api_key');
+  document.getElementById('dashboard').style.display = 'none';
+  document.getElementById('setup-screen').style.display = 'flex';
+}
+
+function showDashboard() {
+  document.getElementById('setup-screen').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+}
+
+// ─── AUTO-LOAD IF KEY EXISTS ───
+window.addEventListener('load', () => {
+  if (getKey()) showDashboard();
+});
+
+// ─── PROGRESS STEPS ───
+const STEPS = [
+  { id:'s1', text:'Fetching FII/DII cash segment data...' },
+  { id:'s2', text:'Fetching FII derivative & futures positions...' },
+  { id:'s3', text:'Fetching India VIX & PCR data...' },
+  { id:'s4', text:'Fetching Gift Nifty & global market cues...' },
+  { id:'s5', text:'Running AI analysis across all signals...' },
+  { id:'s6', text:'Generating pre-market outlook report...' },
+];
+function renderLog() {
+  document.getElementById('log-entries').innerHTML = STEPS.map(s =>
+    `<div class="log-entry" id="${s.id}"><div class="log-dot"></div><span>${s.text}</span></div>`
+  ).join('');
+}
+function setStep(id, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = `log-entry ${state}`;
+  if (state==='done') el.querySelector('span').textContent = '✓ ' + el.querySelector('span').textContent.replace(/^✓ /,'');
+}
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
+// ─── MAIN ANALYSIS ───
+async function runAnalysis() {
+  const key = getKey();
+  if (!key) { changeKey(); return; }
+
+  document.getElementById('fetch-btn').disabled = true;
+  document.getElementById('result').style.display = 'none';
+  const pb = document.getElementById('progress-box');
+  pb.style.display = 'block';
+  renderLog();
+
+  const today = new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
+  const todayStr = today.toLocaleDateString('en-IN',{day:'numeric',month:'long',year:'numeric'});
+  const todayISO = today.toISOString().split('T')[0];
+
+  try {
+    setStep('s1','active');
+
+    const systemPrompt = `You are an expert Indian stock market pre-market analyst with web search capability.
+Search for the LATEST available FII/DII data for Indian markets.
+Respond ONLY in valid JSON. No markdown, no explanation outside the JSON object.
+
+Required JSON format:
+{
+  "data_date": "date string",
+  "fii_cash_net": number_or_null,
+  "dii_cash_net": number_or_null,
+  "fii_futures_net_contracts": number_or_null,
+  "oi_direction": "INCREASING"|"DECREASING"|"UNKNOWN",
+  "ls_ratio": number_or_null,
+  "pcr": number_or_null,
+  "pcr_trend": "RISING"|"FALLING"|"STABLE"|"UNKNOWN",
+  "india_vix": number_or_null,
+  "vix_trend": "RISING"|"FALLING"|"STABLE"|"UNKNOWN",
+  "nifty_prev_close": number_or_null,
+  "gift_nifty": "POSITIVE"|"NEGATIVE"|"FLAT"|"UNKNOWN",
+  "gift_nifty_points": number_or_null,
+  "us_markets": "UP"|"DOWN"|"FLAT"|"UNKNOWN",
+  "sp500_change_pct": number_or_null,
+  "rupee_trend": "STRENGTHENING"|"WEAKENING"|"STABLE"|"UNKNOWN",
+  "usdinr": number_or_null,
+  "crude_trend": "RISING"|"FALLING"|"STABLE"|"UNKNOWN",
+  "verdict": "BEARISH"|"BULLISH"|"NEUTRAL"|"CAUTIOUS",
+  "conviction": "HIGH"|"MEDIUM"|"LOW",
+  "nifty_bias": "one sharp sentence on Nifty direction today",
+  "expected_support": number_or_null,
+  "expected_resistance": number_or_null,
+  "cash_analysis": "2-3 sentences analyzing FII vs DII cash battle",
+  "futures_analysis": "2-3 sentences on futures OI and FII positioning",
+  "options_analysis": "2-3 sentences on PCR, VIX, max pain dynamics",
+  "global_analysis": "1-2 sentences on global cues impact on India",
+  "key_risk": "the single biggest risk to watch today",
+  "action_points": ["point1","point2","point3","point4"],
+  "signal_scores": {
+    "cash": "BEARISH"|"BULLISH"|"NEUTRAL",
+    "futures": "BEARISH"|"BULLISH"|"NEUTRAL",
+    "options": "BEARISH"|"BULLISH"|"NEUTRAL",
+    "global": "BEARISH"|"BULLISH"|"NEUTRAL"
+  },
+  "data_sources_found": ["source1","source2"]
+}`;
+
+    const userMsg = `Today is ${todayStr} (${todayISO}, IST).
+Search for and analyze the latest FII/DII market data for Indian markets.
+Find: FII net cash activity, FII futures OI change, India VIX, Nifty PCR, Gift Nifty pre-open level, US markets overnight (S&P500/Nasdaq), USDINR, crude oil.
+Use today's provisional data if available, else yesterday's confirmed data.
+Generate the complete pre-market analysis JSON now.`;
+
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 1000,
+        tools: [{ type: "web_search_20250305", name: "web_search" }],
+        system: systemPrompt,
+        messages: [{ role:"user", content: userMsg }]
+      })
+    });
+
+    await delay(600); setStep('s1','done'); setStep('s2','active');
+    await delay(600); setStep('s2','done'); setStep('s3','active');
+    await delay(500); setStep('s3','done'); setStep('s4','active');
+
+    if (resp.status === 401) {
+      throw new Error('INVALID_KEY');
+    }
+    if (!resp.ok) {
+      throw new Error(`API_ERROR_${resp.status}`);
+    }
+
+    const data = await resp.json();
+    setStep('s4','done'); setStep('s5','active');
+    await delay(400);
+
+    const textBlocks = (data.content||[]).filter(b => b.type==='text');
+    const fullText = textBlocks.map(b => b.text).join('\n');
+    const jsonMatch = fullText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('NO_JSON');
+    const result = JSON.parse(jsonMatch[0]);
+
+    setStep('s5','done'); setStep('s6','active');
+    await delay(300);
+    setStep('s6','done');
+    await delay(400);
+
+    pb.style.display = 'none';
+    renderResult(result);
+
+  } catch(e) {
+    console.error(e);
+    STEPS.forEach(s => {
+      const el = document.getElementById(s.id);
+      if (el && !el.classList.contains('done')) setStep(s.id,'error');
+    });
+    await delay(800);
+    pb.style.display = 'none';
+    if (e.message === 'INVALID_KEY') {
+      renderError('invalid_key');
+    } else {
+      renderError('general');
+    }
+  } finally {
+    document.getElementById('fetch-btn').disabled = false;
+  }
+}
+
+// ─── RENDER RESULT ───
+function sigClass(s) { return (s||'').toUpperCase()==='BEARISH'?'bear':(s||'').toUpperCase()==='BULLISH'?'bull':'neutral'; }
+function sigIcon(s) { return (s||'').toUpperCase()==='BEARISH'?'▼':(s||'').toUpperCase()==='BULLISH'?'▲':'◆'; }
+
+function renderResult(r) {
+  const vc = (r.verdict||'neutral').toLowerCase();
+  const sources = (r.data_sources_found||[]).slice(0,5);
+
+  const html = `
+    <div class="refresh-row">
+      <div class="last-updated">📅 Data: ${r.data_date||'Latest'} &nbsp;·&nbsp; Generated: ${new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}</div>
+      <button class="refresh-btn" onclick="runAnalysis()">↻ Refresh Analysis</button>
+    </div>
+
+    <div class="sources-row">
+      ${sources.map(s=>`<div class="source-chip"><div class="sdot sdot-done"></div>${s}</div>`).join('')}
+      ${!sources.length?'<div class="source-chip"><div class="sdot sdot-done"></div>Web sources used</div>':''}
+    </div>
+
+    <div class="verdict-hero vh-${vc}">
+      <div class="verdict-top">
+        <div>
+          <div class="verdict-label">Today's Market Verdict</div>
+          <div class="verdict-word ${vc}">${r.verdict||'NEUTRAL'}</div>
+        </div>
+        <div class="conviction-box">
+          <div class="conv-label">Conviction</div>
+          <div class="conv-value conv-${(r.conviction||'low').toLowerCase()}">${r.conviction||'LOW'}</div>
+        </div>
+      </div>
+      <div class="bias-text">🎯 ${r.nifty_bias||'Awaiting directional data.'}</div>
+    </div>
+
+    <div class="scoreboard">
+      ${[{icon:'💰',name:'CASH',sig:r.signal_scores?.cash},{icon:'📉',name:'FUTURES',sig:r.signal_scores?.futures},{icon:'📊',name:'OPTIONS',sig:r.signal_scores?.options},{icon:'🌍',name:'GLOBAL',sig:r.signal_scores?.global}]
+        .map(s=>`<div class="score-card ${sigClass(s.sig)}"><div class="score-icon">${s.icon}</div><div class="score-name">${s.name}</div><div class="score-val ${sigClass(s.sig)}">${sigIcon(s.sig)} ${s.sig||'N/A'}</div></div>`).join('')}
+    </div>
+
+    <div class="numbers-row">
+      <div class="num-card">
+        <div class="num-label">FII Cash Net</div>
+        <div class="num-value" style="font-family:'IBM Plex Mono',monospace;color:${r.fii_cash_net<0?'var(--bear)':'var(--bull)'};">${r.fii_cash_net!=null?`${r.fii_cash_net>0?'+':''}₹${Number(r.fii_cash_net).toLocaleString('en-IN')} Cr`:'N/A'}</div>
+        <div class="num-sub">DII: ${r.dii_cash_net!=null?`${r.dii_cash_net>0?'+':''}₹${Number(r.dii_cash_net).toLocaleString('en-IN')} Cr`:'N/A'}</div>
+      </div>
+      <div class="num-card">
+        <div class="num-label">India VIX</div>
+        <div class="num-value" style="font-family:'IBM Plex Mono',monospace;color:${r.india_vix>20?'var(--bear)':r.india_vix>16?'var(--neutral)':'var(--bull)'};">${r.india_vix??'N/A'}</div>
+        <div class="num-sub">${r.vix_trend?`Trend: ${r.vix_trend}`:''}</div>
+      </div>
+      <div class="num-card">
+        <div class="num-label">Gift Nifty</div>
+        <div class="num-value" style="font-family:'IBM Plex Mono',monospace;color:${r.gift_nifty==='POSITIVE'?'var(--bull)':r.gift_nifty==='NEGATIVE'?'var(--bear)':'var(--neutral)'};">
+          ${r.gift_nifty||'N/A'}${r.gift_nifty_points?` (${r.gift_nifty_points>0?'+':''}${r.gift_nifty_points})`:''}
+        </div>
+        <div class="num-sub">US: ${r.us_markets||'N/A'}${r.sp500_change_pct?` (${r.sp500_change_pct>0?'+':''}${r.sp500_change_pct}%)`:''}  |  ₹${r.usdinr??'N/A'}</div>
+      </div>
+    </div>
+
+    ${r.expected_support||r.expected_resistance?`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+      <div class="num-card" style="border-color:rgba(0,229,160,0.2);background:rgba(0,229,160,0.03);">
+        <div class="num-label">Expected Support</div>
+        <div class="num-value" style="color:var(--bull);font-family:'IBM Plex Mono',monospace;">${r.expected_support??'—'}</div>
+      </div>
+      <div class="num-card" style="border-color:rgba(255,64,96,0.2);background:rgba(255,64,96,0.03);">
+        <div class="num-label">Expected Resistance</div>
+        <div class="num-value" style="color:var(--bear);font-family:'IBM Plex Mono',monospace;">${r.expected_resistance??'—'}</div>
+      </div>
+    </div>`:''}
+
+    <div class="analysis-grid">
+      <div class="a-card"><div class="a-title">💰 Cash Segment</div><div class="a-body">${r.cash_analysis||'N/A'}</div></div>
+      <div class="a-card"><div class="a-title">📉 Futures & OI</div><div class="a-body">${r.futures_analysis||'N/A'}</div></div>
+      <div class="a-card"><div class="a-title">📊 Options · VIX · PCR</div><div class="a-body">${r.options_analysis||'N/A'}</div></div>
+      <div class="a-card"><div class="a-title">🌍 Global Cues</div><div class="a-body">${r.global_analysis||'N/A'}</div></div>
+    </div>
+
+    <div class="risk-box">
+      <div class="risk-icon">⚠️</div>
+      <div><div class="risk-title">Key Risk to Watch Today</div><div class="risk-text">${r.key_risk||'Monitor FII activity.'}</div></div>
+    </div>
+
+    <div class="actions-card">
+      <div class="a-title">✅ Pre-Market Action Points</div>
+      ${(r.action_points||[]).map((pt,i)=>`<div class="action-row"><div class="action-num">${i+1}</div><div>${pt}</div></div>`).join('')}
+    </div>
+
+    <div class="disclaimer">⚠ AI-generated for educational purposes only. Not SEBI-registered investment advice. Always verify data independently.</div>
+  `;
+
+  const el = document.getElementById('result');
+  el.innerHTML = html;
+  el.style.display = 'block';
+  el.scrollIntoView({behavior:'smooth'});
+}
+
+function renderError(type) {
+  const msg = type === 'invalid_key'
+    ? `<strong style="color:var(--bear)">Invalid API Key.</strong> Please check your key and try again. <br/><br/><button class="refresh-btn" onclick="changeKey()" style="margin:0 auto;">⚙ Re-enter API Key</button>`
+    : `Data fetch failed. This can happen early morning before NSE publishes data.<br/><br/><strong style="color:var(--text)">Try again after 8:30 AM IST.</strong><br/><br/><button class="refresh-btn" onclick="runAnalysis()" style="margin:0 auto;">↻ Retry</button>`;
+
+  document.getElementById('result').innerHTML = `
+    <div style="background:rgba(255,64,96,0.06);border:1px solid rgba(255,64,96,0.2);border-radius:12px;padding:28px;text-align:center;">
+      <div style="font-size:36px;margin-bottom:12px;">⚠️</div>
+      <div style="font-size:13px;color:var(--dim);line-height:1.8;">${msg}</div>
+    </div>`;
+  document.getElementById('result').style.display = 'block';
+}
+</script>
+</body>
+</html>
