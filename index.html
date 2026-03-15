@@ -275,15 +275,28 @@ body {
     <div class="setup-step">
       <div class="step-num">3</div>
       <div class="step-text">
-        Paste your API key below. It will be saved in your browser and never sent anywhere except directly to Anthropic.
+        Go to <a href="https://script.google.com" target="_blank">script.google.com</a> → New Project → paste the <code>Code.gs</code> file contents → Deploy → Web App → Access: <strong style="color:#fff">Anyone</strong> → Copy the URL.
+      </div>
+    </div>
+    <div class="setup-step">
+      <div class="step-num">4</div>
+      <div class="step-text">
+        Paste your API key and Apps Script URL below. Both are saved only in your browser.
       </div>
     </div>
 
     <div class="api-field">
-      <label class="api-label">Your Anthropic API Key</label>
+      <label class="api-label">Anthropic API Key</label>
       <div class="api-input-row">
         <input type="password" class="api-input" id="api-key-input" placeholder="sk-ant-api03-..." />
         <button class="toggle-vis" onclick="toggleVis()" id="vis-btn">👁</button>
+      </div>
+    </div>
+
+    <div class="api-field">
+      <label class="api-label">Google Apps Script Proxy URL</label>
+      <div class="api-input-row">
+        <input type="text" class="api-input" id="proxy-url-input" placeholder="https://script.google.com/macros/s/ABC.../exec" />
       </div>
     </div>
 
@@ -361,14 +374,21 @@ function toggleVis() {
 
 function saveAndStart() {
   const key = document.getElementById('api-key-input').value.trim();
+  const proxy = document.getElementById('proxy-url-input').value.trim();
   if (!key || !key.startsWith('sk-ant')) {
     alert('Please enter a valid Anthropic API key starting with sk-ant-...');
     return;
   }
+  if (!proxy || !proxy.includes('script.google.com')) {
+    alert('Please enter your Google Apps Script URL.');
+    return;
+  }
   if (document.getElementById('remember-key').checked) {
     localStorage.setItem('fii_api_key', key);
+    localStorage.setItem('fii_proxy_url', proxy);
   } else {
     sessionStorage.setItem('fii_api_key', key);
+    sessionStorage.setItem('fii_proxy_url', proxy);
   }
   showDashboard();
 }
@@ -379,7 +399,9 @@ function getKey() {
 
 function changeKey() {
   localStorage.removeItem('fii_api_key');
+  localStorage.removeItem('fii_proxy_url');
   sessionStorage.removeItem('fii_api_key');
+  sessionStorage.removeItem('fii_proxy_url');
   document.getElementById('dashboard').style.display = 'none';
   document.getElementById('setup-screen').style.display = 'flex';
 }
@@ -432,96 +454,78 @@ async function runAnalysis() {
   const todayISO = today.toISOString().split('T')[0];
 
   // ── Helpers ──────────────────────────────────────────────
-  const CORS = 'https://api.allorigins.win/raw?url=';
-
-  const tryFetch = async (url, useProxy = false) => {
-    const urls = useProxy
-      ? [ CORS + encodeURIComponent(url), url ]   // try proxy first, then direct
-      : [ url, CORS + encodeURIComponent(url) ];   // try direct first, then proxy
-    for (const u of urls) {
-      try {
-        const r = await fetch(u, { headers: { 'Accept': 'application/json' } });
-        if (!r.ok) continue;
-        const text = await r.text();
-        return JSON.parse(text);
-      } catch(e) { continue; }
-    }
-    return null;
-  };
-
   const tryParse = str => {
     try { return JSON.parse(str); } catch(e) { return null; }
   };
 
+  // YOUR APPS SCRIPT URL — replace after deploying
+  const PROXY_URL = localStorage.getItem('fii_proxy_url') || '';
+
+  if (!PROXY_URL) {
+    pb.style.display = 'none';
+    renderError('no_proxy');
+    document.getElementById('fetch-btn').disabled = false;
+    return;
+  }
+
+  const tryFetch = async (url) => {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) return null;
+      return await r.json();
+    } catch(e) { return null; }
+  };
+
   try {
-    // ── STEP 1: FII/DII Cash ─────────────────────────────
-    // NSE requires a session cookie — we fetch the homepage first to get one,
-    // then hit the API. allorigins proxy handles CORS for both.
+    // ── STEP 1: FII/DII Cash via Apps Script ─────────────
     setStep('s1','active');
     let fiiCash = null, diiCash = null, dataDate = todayStr;
+    let futBuy = null, futSell = null, futNet = null;
+    let vix = null, niftyClose = null, bankNifty = null;
 
-    // Try NSE API (needs cookie trick — proxy handles headers)
-    const nseData = await tryFetch('https://www.nseindia.com/api/fiidiiTradeReact', true);
-    if (nseData && Array.isArray(nseData) && nseData.length > 0) {
-      const latest = nseData[0];
-      fiiCash  = parseFloat(latest?.fii?.netVal  ?? latest?.fiiNetVal)  || null;
-      diiCash  = parseFloat(latest?.dii?.netVal  ?? latest?.diiNetVal)  || null;
-      dataDate = latest?.date || todayStr;
-    }
-
-    // Fallback: try Trendlyne public JSON
-    if (fiiCash === null) {
-      const tlData = await tryFetch('https://trendlyne.com/macro-data/fii-dii-json/latest/', true);
-      if (tlData?.fii_net) { fiiCash = parseFloat(tlData.fii_net) || null; }
-      if (tlData?.dii_net) { diiCash = parseFloat(tlData.dii_net) || null; }
+    const proxyData = await tryFetch(PROXY_URL + '?source=all');
+    if (proxyData?.fii && !proxyData.fii.error) {
+      fiiCash  = proxyData.fii.fiiNet  || null;
+      diiCash  = proxyData.fii.diiNet  || null;
+      dataDate = proxyData.fii.date    || todayStr;
     }
     setStep('s1','done');
 
-    // ── STEP 2: FII Derivatives ───────────────────────────
+    // ── STEP 2: Derivatives ───────────────────────────────
     setStep('s2','active');
-    let futBuy = null, futSell = null, futNet = null;
-
-    const cdslData = await tryFetch('https://www.cdslindia.com/eservices/publications/fiidailyJSON', true);
-    if (cdslData) {
-      const idxFut = cdslData?.derivatives?.find?.(d => d?.product === 'INDEX_FUTURES');
+    if (proxyData?.cdsl && !proxyData.cdsl.error) {
+      const idxFut = proxyData.cdsl['INDEX_FUTURES'];
       if (idxFut) {
-        futBuy  = parseFloat(idxFut.buy_contracts)  || null;
-        futSell = parseFloat(idxFut.sell_contracts) || null;
-        if (futBuy && futSell) futNet = futBuy - futSell;
+        futBuy  = idxFut.buy  || null;
+        futSell = idxFut.sell || null;
+        futNet  = idxFut.net  || null;
       }
     }
     setStep('s2','done');
 
     // ── STEP 3: VIX + Nifty ──────────────────────────────
     setStep('s3','active');
-    let vix = null, niftyClose = null;
-
-    // Try NSE indices API
-    const vixData = await tryFetch('https://www.nseindia.com/api/allIndices', true);
-    if (vixData?.data) {
-      const vixEntry   = vixData.data.find(d => d.indexSymbol === 'INDIA VIX');
-      const niftyEntry = vixData.data.find(d => d.indexSymbol === 'NIFTY 50');
-      if (vixEntry)   vix        = parseFloat(vixEntry.last)  || null;
-      if (niftyEntry) niftyClose = parseFloat(niftyEntry.last) || null;
+    if (proxyData?.nse && !proxyData.nse.error) {
+      vix        = proxyData.nse.vix       || null;
+      niftyClose = proxyData.nse.nifty     || null;
+      bankNifty  = proxyData.nse.bankNifty || null;
     }
-
-    // Fallback: Yahoo Finance for Nifty
+    // Fallback: Yahoo Finance (CORS-friendly, no proxy needed)
     if (niftyClose === null) {
       const yNifty = await tryFetch('https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=2d');
-      const closes = yNifty?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+      const closes = yNifty?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(Boolean);
       if (closes?.length) niftyClose = +closes[closes.length-1].toFixed(2);
     }
-    // Fallback: Yahoo Finance for VIX India
     if (vix === null) {
       const yVix = await tryFetch('https://query1.finance.yahoo.com/v8/finance/chart/%5EINDIAVIX?interval=1d&range=2d');
-      const closes = yVix?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+      const closes = yVix?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(Boolean);
       if (closes?.length) vix = +closes[closes.length-1].toFixed(2);
     }
     setStep('s3','done');
 
-    // ── STEP 4: Global cues (Yahoo Finance — CORS-friendly) ──
+    // ── STEP 4: Global — Yahoo Finance (always CORS-safe) ─
     setStep('s4','active');
-    let sp500Change = null, usdinr = null, crudePrice = null, nasdaqChange = null;
+    let sp500Change = null, nasdaqChange = null, usdinr = null, crudePrice = null;
 
     const [spData, fxData, oilData, ndxData] = await Promise.all([
       tryFetch('https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=2d'),
@@ -531,14 +535,13 @@ async function runAnalysis() {
     ]);
 
     const pctChange = (data) => {
-      const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(Boolean);
-      if (!closes || closes.length < 2) return null;
-      return +((closes[closes.length-1] - closes[closes.length-2]) / closes[closes.length-2] * 100).toFixed(2);
+      const c = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(Boolean);
+      if (!c || c.length < 2) return null;
+      return +((c[c.length-1] - c[c.length-2]) / c[c.length-2] * 100).toFixed(2);
     };
     const lastClose = (data) => {
-      const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(Boolean);
-      if (!closes?.length) return null;
-      return +closes[closes.length-1].toFixed(2);
+      const c = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(Boolean);
+      return c?.length ? +c[c.length-1].toFixed(2) : null;
     };
 
     sp500Change  = pctChange(spData);
@@ -803,11 +806,13 @@ function renderResult(r) {
 function renderError(type, detail) {
   let msg;
   if (type === 'invalid_key') {
-    msg = `<strong style="color:var(--bear)">Invalid API Key.</strong> Please check your key and try again.<br/><br/><button class="refresh-btn" onclick="changeKey()" style="margin:0 auto;">⚙ Re-enter API Key</button>`;
+    msg = `<strong style="color:var(--bear)">Invalid API Key.</strong> Please check your Anthropic key and try again.<br/><br/><button class="refresh-btn" onclick="changeKey()" style="margin:0 auto;">⚙ Re-enter Settings</button>`;
+  } else if (type === 'no_proxy') {
+    msg = `<strong style="color:var(--bear)">Apps Script URL missing.</strong> Please set up your Google Apps Script proxy first.<br/><br/><button class="refresh-btn" onclick="changeKey()" style="margin:0 auto;">⚙ Enter Settings</button>`;
   } else if (type === 'no_json') {
-    msg = `Claude returned data but could not generate the final JSON report. This sometimes happens when web search returns too much data.<br/><br/><strong style="color:var(--text)">Please try again — it usually works on retry.</strong><br/><br/><button class="refresh-btn" onclick="runAnalysis()" style="margin:0 auto;">↻ Retry Now</button>`;
+    msg = `Claude returned data but could not generate the JSON report. Please retry.<br/><br/><button class="refresh-btn" onclick="runAnalysis()" style="margin:0 auto;">↻ Retry Now</button>`;
   } else {
-    msg = `Data fetch failed${detail ? ` (${detail})` : ''}. This can happen early morning before NSE publishes data.<br/><br/><strong style="color:var(--text)">Try again after 8:30 AM IST.</strong><br/><br/><button class="refresh-btn" onclick="runAnalysis()" style="margin:0 auto;">↻ Retry</button>`;
+    msg = `Data fetch failed${detail ? ` (${detail})` : ''}. Try again after 8:30 AM IST.<br/><br/><button class="refresh-btn" onclick="runAnalysis()" style="margin:0 auto;">↻ Retry</button>`;
   }
 
   document.getElementById('result').innerHTML = `
