@@ -482,83 +482,128 @@ Find: FII net cash activity, FII futures OI change, India VIX, Nifty PCR, Gift N
 Use today's provisional data if available, else yesterday's confirmed data.
 Generate the complete pre-market analysis JSON now.`;
 
-    // Step ticker — runs while API call is in progress
-    let stepIdx = 0;
+    // Step ticker for first 4 steps while searches run
     const stepIds = ['s1','s2','s3','s4'];
+    let stepIdx = 0;
     setStep(stepIds[0], 'active');
     const stepTicker = setInterval(() => {
       setStep(stepIds[stepIdx], 'done');
       stepIdx++;
       if (stepIdx < stepIds.length) setStep(stepIds[stepIdx], 'active');
       else clearInterval(stepTicker);
-    }, 3500);
+    }, 4000);
 
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 4000,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-        system: systemPrompt,
-        messages: [{ role:"user", content: userMsg }]
-      })
-    });
+    const API_HEADERS = {
+      "Content-Type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    };
+    const TOOLS = [{ type: "web_search_20250305", name: "web_search" }];
+
+    // ── Multi-turn tool loop ──────────────────────────────
+    // Claude with web_search stops at stop_reason="tool_use" and expects
+    // tool results to be sent back. We loop until stop_reason="end_turn".
+    let messages = [{ role: "user", content: userMsg }];
+    let finalText = '';
+    let loopGuard = 0;
+
+    while (loopGuard < 8) {
+      loopGuard++;
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: API_HEADERS,
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4000,
+          tools: TOOLS,
+          system: systemPrompt,
+          messages
+        })
+      });
+
+      if (resp.status === 401) { clearInterval(stepTicker); throw new Error('INVALID_KEY'); }
+      if (!resp.ok) { clearInterval(stepTicker); throw new Error(`API_ERROR_${resp.status}`); }
+
+      const data = await resp.json();
+      const content = data.content || [];
+
+      // Add assistant turn to messages
+      messages.push({ role: "assistant", content });
+
+      if (data.stop_reason === "end_turn") {
+        // Collect all text blocks from this final turn
+        finalText = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+        break;
+      }
+
+      if (data.stop_reason === "tool_use") {
+        // Build tool_result blocks for every tool_use block
+        const toolResults = content
+          .filter(b => b.type === 'tool_use')
+          .map(b => ({
+            type: "tool_result",
+            tool_use_id: b.id,
+            content: b.input?.query
+              ? `Search completed for: ${b.input.query}`
+              : "Search completed"
+          }));
+
+        if (toolResults.length === 0) break; // safety
+        messages.push({ role: "user", content: toolResults });
+        continue;
+      }
+
+      // Any other stop reason — grab what text we have
+      finalText = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+      break;
+    }
 
     clearInterval(stepTicker);
     stepIds.forEach(id => setStep(id, 'done'));
-
-    if (resp.status === 401) throw new Error('INVALID_KEY');
-    if (!resp.ok) throw new Error(`API_ERROR_${resp.status}`);
-
-    setStep('s5','active');
-    const data = await resp.json();
+    setStep('s5', 'active');
     await delay(300);
 
-    // Robust JSON extraction — handles markdown fences, extra text, nested objects
-    const textBlocks = (data.content||[]).filter(b => b.type==='text');
-    const fullText = textBlocks.map(b => b.text).join('\n');
-
-    // Try multiple extraction strategies
+    // ── Robust JSON extraction ────────────────────────────
     let result = null;
 
-    // Strategy 1: direct JSON parse
-    try { result = JSON.parse(fullText.trim()); } catch(e) {}
+    const tryParse = str => {
+      try { return JSON.parse(str); } catch(e) { return null; }
+    };
 
-    // Strategy 2: strip markdown fences
+    // 1. Direct parse
+    result = tryParse(finalText.trim());
+
+    // 2. Strip markdown fences
     if (!result) {
-      try {
-        const stripped = fullText.replace(/```json\s*/gi,'').replace(/```\s*/g,'').trim();
-        result = JSON.parse(stripped);
-      } catch(e) {}
+      result = tryParse(finalText.replace(/```json\s*/gi,'').replace(/```\s*/g,'').trim());
     }
 
-    // Strategy 3: find the largest {...} block
+    // 3. First { to last }
     if (!result) {
-      const matches = fullText.match(/\{[\s\S]*\}/g);
-      if (matches) {
-        // Pick the longest match (most complete JSON)
-        const longest = matches.sort((a,b) => b.length - a.length)[0];
-        try { result = JSON.parse(longest); } catch(e) {}
+      const s = finalText.indexOf('{'), e = finalText.lastIndexOf('}');
+      if (s !== -1 && e > s) result = tryParse(finalText.substring(s, e + 1));
+    }
+
+    // 4. Scan all messages for JSON (in case it appeared in an earlier turn)
+    if (!result) {
+      for (const msg of messages) {
+        const blocks = Array.isArray(msg.content) ? msg.content : [];
+        for (const b of blocks) {
+          if (b.type === 'text' && b.text && b.text.includes('"verdict"')) {
+            const s = b.text.indexOf('{'), e = b.text.lastIndexOf('}');
+            if (s !== -1 && e > s) {
+              result = tryParse(b.text.substring(s, e + 1));
+              if (result) break;
+            }
+          }
+        }
+        if (result) break;
       }
     }
 
-    // Strategy 4: find JSON between first { and last }
     if (!result) {
-      const start = fullText.indexOf('{');
-      const end = fullText.lastIndexOf('}');
-      if (start !== -1 && end !== -1 && end > start) {
-        try { result = JSON.parse(fullText.substring(start, end + 1)); } catch(e) {}
-      }
-    }
-
-    if (!result) {
-      console.error('Raw API response:', fullText);
+      console.error('All messages:', JSON.stringify(messages, null, 2));
       throw new Error('NO_JSON');
     }
 
@@ -571,7 +616,7 @@ Generate the complete pre-market analysis JSON now.`;
     renderResult(result);
 
   } catch(e) {
-    console.error(e);
+    console.error('Dashboard error:', e);
     STEPS.forEach(s => {
       const el = document.getElementById(s.id);
       if (el && !el.classList.contains('done')) setStep(s.id,'error');
@@ -580,8 +625,10 @@ Generate the complete pre-market analysis JSON now.`;
     pb.style.display = 'none';
     if (e.message === 'INVALID_KEY') {
       renderError('invalid_key');
+    } else if (e.message === 'NO_JSON') {
+      renderError('no_json');
     } else {
-      renderError('general');
+      renderError('general', e.message);
     }
   } finally {
     document.getElementById('fetch-btn').disabled = false;
@@ -684,10 +731,15 @@ function renderResult(r) {
   el.scrollIntoView({behavior:'smooth'});
 }
 
-function renderError(type) {
-  const msg = type === 'invalid_key'
-    ? `<strong style="color:var(--bear)">Invalid API Key.</strong> Please check your key and try again. <br/><br/><button class="refresh-btn" onclick="changeKey()" style="margin:0 auto;">⚙ Re-enter API Key</button>`
-    : `Data fetch failed. This can happen early morning before NSE publishes data.<br/><br/><strong style="color:var(--text)">Try again after 8:30 AM IST.</strong><br/><br/><button class="refresh-btn" onclick="runAnalysis()" style="margin:0 auto;">↻ Retry</button>`;
+function renderError(type, detail) {
+  let msg;
+  if (type === 'invalid_key') {
+    msg = `<strong style="color:var(--bear)">Invalid API Key.</strong> Please check your key and try again.<br/><br/><button class="refresh-btn" onclick="changeKey()" style="margin:0 auto;">⚙ Re-enter API Key</button>`;
+  } else if (type === 'no_json') {
+    msg = `Claude returned data but could not generate the final JSON report. This sometimes happens when web search returns too much data.<br/><br/><strong style="color:var(--text)">Please try again — it usually works on retry.</strong><br/><br/><button class="refresh-btn" onclick="runAnalysis()" style="margin:0 auto;">↻ Retry Now</button>`;
+  } else {
+    msg = `Data fetch failed${detail ? ` (${detail})` : ''}. This can happen early morning before NSE publishes data.<br/><br/><strong style="color:var(--text)">Try again after 8:30 AM IST.</strong><br/><br/><button class="refresh-btn" onclick="runAnalysis()" style="margin:0 auto;">↻ Retry</button>`;
+  }
 
   document.getElementById('result').innerHTML = `
     <div style="background:rgba(255,64,96,0.06);border:1px solid rgba(255,64,96,0.2);border-radius:12px;padding:28px;text-align:center;">
