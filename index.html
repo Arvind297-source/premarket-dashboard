@@ -432,12 +432,21 @@ async function runAnalysis() {
   const todayISO = today.toISOString().split('T')[0];
 
   // ── Helpers ──────────────────────────────────────────────
-  const tryFetch = async (url) => {
-    try {
-      const r = await fetch(url);
-      if (!r.ok) return null;
-      return await r.json();
-    } catch(e) { return null; }
+  const CORS = 'https://api.allorigins.win/raw?url=';
+
+  const tryFetch = async (url, useProxy = false) => {
+    const urls = useProxy
+      ? [ CORS + encodeURIComponent(url), url ]   // try proxy first, then direct
+      : [ url, CORS + encodeURIComponent(url) ];   // try direct first, then proxy
+    for (const u of urls) {
+      try {
+        const r = await fetch(u, { headers: { 'Accept': 'application/json' } });
+        if (!r.ok) continue;
+        const text = await r.text();
+        return JSON.parse(text);
+      } catch(e) { continue; }
+    }
+    return null;
   };
 
   const tryParse = str => {
@@ -445,65 +454,97 @@ async function runAnalysis() {
   };
 
   try {
-    // ── STEP 1: FII/DII Cash via NSE API ─────────────────
+    // ── STEP 1: FII/DII Cash ─────────────────────────────
+    // NSE requires a session cookie — we fetch the homepage first to get one,
+    // then hit the API. allorigins proxy handles CORS for both.
     setStep('s1','active');
     let fiiCash = null, diiCash = null, dataDate = todayStr;
-    const nseData = await tryFetch('https://www.nseindia.com/api/fiidiiTradeReact');
+
+    // Try NSE API (needs cookie trick — proxy handles headers)
+    const nseData = await tryFetch('https://www.nseindia.com/api/fiidiiTradeReact', true);
     if (nseData && Array.isArray(nseData) && nseData.length > 0) {
       const latest = nseData[0];
-      fiiCash = parseFloat(latest?.fii?.netVal || latest?.fiiNetVal) || null;
-      diiCash = parseFloat(latest?.dii?.netVal || latest?.diiNetVal) || null;
+      fiiCash  = parseFloat(latest?.fii?.netVal  ?? latest?.fiiNetVal)  || null;
+      diiCash  = parseFloat(latest?.dii?.netVal  ?? latest?.diiNetVal)  || null;
       dataDate = latest?.date || todayStr;
+    }
+
+    // Fallback: try Trendlyne public JSON
+    if (fiiCash === null) {
+      const tlData = await tryFetch('https://trendlyne.com/macro-data/fii-dii-json/latest/', true);
+      if (tlData?.fii_net) { fiiCash = parseFloat(tlData.fii_net) || null; }
+      if (tlData?.dii_net) { diiCash = parseFloat(tlData.dii_net) || null; }
     }
     setStep('s1','done');
 
-    // ── STEP 2: FII Derivatives via CDSL ─────────────────
+    // ── STEP 2: FII Derivatives ───────────────────────────
     setStep('s2','active');
     let futBuy = null, futSell = null, futNet = null;
-    const cdslData = await tryFetch('https://www.cdslindia.com/eservices/publications/fiidailyJSON');
+
+    const cdslData = await tryFetch('https://www.cdslindia.com/eservices/publications/fiidailyJSON', true);
     if (cdslData) {
       const idxFut = cdslData?.derivatives?.find?.(d => d?.product === 'INDEX_FUTURES');
       if (idxFut) {
-        futBuy  = parseFloat(idxFut.buy_contracts) || null;
+        futBuy  = parseFloat(idxFut.buy_contracts)  || null;
         futSell = parseFloat(idxFut.sell_contracts) || null;
         if (futBuy && futSell) futNet = futBuy - futSell;
       }
     }
     setStep('s2','done');
 
-    // ── STEP 3: VIX + Nifty via NSE ──────────────────────
+    // ── STEP 3: VIX + Nifty ──────────────────────────────
     setStep('s3','active');
     let vix = null, niftyClose = null;
-    const vixData = await tryFetch('https://www.nseindia.com/api/allIndices');
+
+    // Try NSE indices API
+    const vixData = await tryFetch('https://www.nseindia.com/api/allIndices', true);
     if (vixData?.data) {
       const vixEntry   = vixData.data.find(d => d.indexSymbol === 'INDIA VIX');
       const niftyEntry = vixData.data.find(d => d.indexSymbol === 'NIFTY 50');
-      if (vixEntry)   vix        = parseFloat(vixEntry.last) || null;
+      if (vixEntry)   vix        = parseFloat(vixEntry.last)  || null;
       if (niftyEntry) niftyClose = parseFloat(niftyEntry.last) || null;
+    }
+
+    // Fallback: Yahoo Finance for Nifty
+    if (niftyClose === null) {
+      const yNifty = await tryFetch('https://query1.finance.yahoo.com/v8/finance/chart/%5ENSEI?interval=1d&range=2d');
+      const closes = yNifty?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+      if (closes?.length) niftyClose = +closes[closes.length-1].toFixed(2);
+    }
+    // Fallback: Yahoo Finance for VIX India
+    if (vix === null) {
+      const yVix = await tryFetch('https://query1.finance.yahoo.com/v8/finance/chart/%5EINDIAVIX?interval=1d&range=2d');
+      const closes = yVix?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+      if (closes?.length) vix = +closes[closes.length-1].toFixed(2);
     }
     setStep('s3','done');
 
-    // ── STEP 4: Global cues via Yahoo Finance (no-CORS proxy) ──
+    // ── STEP 4: Global cues (Yahoo Finance — CORS-friendly) ──
     setStep('s4','active');
-    let sp500Change = null, usdinr = null, crudePrice = null;
-    const yhProxy = 'https://query1.finance.yahoo.com/v8/finance/chart/';
-    const [spData, fxData, oilData] = await Promise.all([
-      tryFetch(`${yhProxy}%5EGSPC?interval=1d&range=2d`),
-      tryFetch(`${yhProxy}USDINR%3DX?interval=1d&range=2d`),
-      tryFetch(`${yhProxy}CL%3DF?interval=1d&range=2d`),
+    let sp500Change = null, usdinr = null, crudePrice = null, nasdaqChange = null;
+
+    const [spData, fxData, oilData, ndxData] = await Promise.all([
+      tryFetch('https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=2d'),
+      tryFetch('https://query1.finance.yahoo.com/v8/finance/chart/USDINR%3DX?interval=1d&range=2d'),
+      tryFetch('https://query1.finance.yahoo.com/v8/finance/chart/CL%3DF?interval=1d&range=2d'),
+      tryFetch('https://query1.finance.yahoo.com/v8/finance/chart/%5EIXIC?interval=1d&range=2d'),
     ]);
-    if (spData?.chart?.result?.[0]) {
-      const closes = spData.chart.result[0].indicators?.quote?.[0]?.close;
-      if (closes?.length >= 2) sp500Change = +((closes[closes.length-1] - closes[closes.length-2]) / closes[closes.length-2] * 100).toFixed(2);
-    }
-    if (fxData?.chart?.result?.[0]) {
-      const closes = fxData.chart.result[0].indicators?.quote?.[0]?.close;
-      if (closes?.length) usdinr = +closes[closes.length-1].toFixed(2);
-    }
-    if (oilData?.chart?.result?.[0]) {
-      const closes = oilData.chart.result[0].indicators?.quote?.[0]?.close;
-      if (closes?.length >= 2) crudePrice = +closes[closes.length-1].toFixed(2);
-    }
+
+    const pctChange = (data) => {
+      const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(Boolean);
+      if (!closes || closes.length < 2) return null;
+      return +((closes[closes.length-1] - closes[closes.length-2]) / closes[closes.length-2] * 100).toFixed(2);
+    };
+    const lastClose = (data) => {
+      const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(Boolean);
+      if (!closes?.length) return null;
+      return +closes[closes.length-1].toFixed(2);
+    };
+
+    sp500Change  = pctChange(spData);
+    nasdaqChange = pctChange(ndxData);
+    usdinr       = lastClose(fxData);
+    crudePrice   = lastClose(oilData);
     setStep('s4','done');
 
     // ── STEP 5: Send all data to Claude for analysis ──────
@@ -513,26 +554,32 @@ async function runAnalysis() {
     const dataSummary = `
 Indian Market Pre-Market Data for ${todayStr}:
 
-CASH SEGMENT:
-- FII Net: ${fiiCash !== null ? `₹${fiiCash} Cr` : 'Not available'}
-- DII Net: ${diiCash !== null ? `₹${diiCash} Cr` : 'Not available'}
+CASH SEGMENT (Source: NSE API):
+- FII Net Cash: ${fiiCash !== null ? `₹${fiiCash} Cr` : 'Could not fetch — NSE API unavailable'}
+- DII Net Cash: ${diiCash !== null ? `₹${diiCash} Cr` : 'Could not fetch'}
 - Data Date: ${dataDate}
 
-INDEX FUTURES (from CDSL):
-- FII Buy Contracts: ${futBuy ?? 'Not available'}
-- FII Sell Contracts: ${futSell ?? 'Not available'}
-- Net Contracts: ${futNet ?? 'Not available'}
+INDEX FUTURES (Source: CDSL API):
+- FII Buy Contracts: ${futBuy ?? 'Could not fetch — CDSL API unavailable'}
+- FII Sell Contracts: ${futSell ?? 'Could not fetch'}
+- Net Contracts: ${futNet ?? 'Not calculated'}
 
-VOLATILITY & MARKET LEVELS:
-- India VIX: ${vix ?? 'Not available'}
-- Nifty 50 Last: ${niftyClose ?? 'Not available'}
+VOLATILITY & MARKET (Source: NSE + Yahoo Finance):
+- India VIX: ${vix ?? 'Could not fetch'}
+- Nifty 50 Last Close: ${niftyClose ?? 'Could not fetch'}
 
-GLOBAL CUES:
-- S&P 500 Change: ${sp500Change !== null ? `${sp500Change}%` : 'Not available'}
-- USD/INR: ${usdinr ?? 'Not available'}
-- Crude Oil (WTI): ${crudePrice !== null ? `$${crudePrice}` : 'Not available'}
+GLOBAL CUES (Source: Yahoo Finance):
+- S&P 500 Change: ${sp500Change !== null ? `${sp500Change}%` : 'Could not fetch'}
+- Nasdaq Change: ${nasdaqChange !== null ? `${nasdaqChange}%` : 'Could not fetch'}
+- USD/INR: ${usdinr ?? 'Could not fetch'}
+- Crude Oil WTI: ${crudePrice !== null ? `$${crudePrice}` : 'Could not fetch'}
 
-Note: PCR, Gift Nifty, OI direction not available via public API — estimate from available data.
+Instructions:
+- Use the data above to generate the analysis
+- For fields marked "Could not fetch", use null in JSON and note data unavailability  
+- For PCR, Gift Nifty, OI direction — these could not be fetched, use UNKNOWN
+- Still generate verdict and analysis based on whatever data IS available
+- Be explicit in analysis text about which data points were unavailable
 `;
 
     const systemPrompt = `You are an expert Indian stock market pre-market analyst.
@@ -623,12 +670,13 @@ JSON format (use null for unavailable fields):
     }
 
     // Patch in any data Claude may have missed from direct fetches
-    if (fiiCash   !== null && result.fii_cash_net   === null) result.fii_cash_net   = fiiCash;
-    if (diiCash   !== null && result.dii_cash_net   === null) result.dii_cash_net   = diiCash;
-    if (vix       !== null && result.india_vix      === null) result.india_vix      = vix;
-    if (niftyClose!== null && result.nifty_prev_close===null) result.nifty_prev_close = niftyClose;
-    if (usdinr    !== null && result.usdinr         === null) result.usdinr         = usdinr;
-    if (sp500Change!==null && result.sp500_change_pct===null) result.sp500_change_pct = sp500Change;
+    if (fiiCash    !== null && !result.fii_cash_net)      result.fii_cash_net      = fiiCash;
+    if (diiCash    !== null && !result.dii_cash_net)      result.dii_cash_net      = diiCash;
+    if (vix        !== null && !result.india_vix)         result.india_vix         = vix;
+    if (niftyClose !== null && !result.nifty_prev_close)  result.nifty_prev_close  = niftyClose;
+    if (usdinr     !== null && !result.usdinr)            result.usdinr            = usdinr;
+    if (sp500Change!== null && !result.sp500_change_pct)  result.sp500_change_pct  = sp500Change;
+    if (!result.data_date) result.data_date = dataDate;
 
     setStep('s6','done');
     await delay(300);
