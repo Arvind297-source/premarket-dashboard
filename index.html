@@ -431,184 +431,205 @@ async function runAnalysis() {
   const todayStr = today.toLocaleDateString('en-IN',{day:'numeric',month:'long',year:'numeric'});
   const todayISO = today.toISOString().split('T')[0];
 
-  try {
-    const systemPrompt = `You are an expert Indian stock market pre-market analyst with web search capability.
-Search for the LATEST available FII/DII data for Indian markets.
-Respond ONLY in valid JSON. No markdown, no explanation outside the JSON object.
+  // ── Helpers ──────────────────────────────────────────────
+  const tryFetch = async (url) => {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) return null;
+      return await r.json();
+    } catch(e) { return null; }
+  };
 
-Required JSON format:
+  const tryParse = str => {
+    try { return JSON.parse(str); } catch(e) { return null; }
+  };
+
+  try {
+    // ── STEP 1: FII/DII Cash via NSE API ─────────────────
+    setStep('s1','active');
+    let fiiCash = null, diiCash = null, dataDate = todayStr;
+    const nseData = await tryFetch('https://www.nseindia.com/api/fiidiiTradeReact');
+    if (nseData && Array.isArray(nseData) && nseData.length > 0) {
+      const latest = nseData[0];
+      fiiCash = parseFloat(latest?.fii?.netVal || latest?.fiiNetVal) || null;
+      diiCash = parseFloat(latest?.dii?.netVal || latest?.diiNetVal) || null;
+      dataDate = latest?.date || todayStr;
+    }
+    setStep('s1','done');
+
+    // ── STEP 2: FII Derivatives via CDSL ─────────────────
+    setStep('s2','active');
+    let futBuy = null, futSell = null, futNet = null;
+    const cdslData = await tryFetch('https://www.cdslindia.com/eservices/publications/fiidailyJSON');
+    if (cdslData) {
+      const idxFut = cdslData?.derivatives?.find?.(d => d?.product === 'INDEX_FUTURES');
+      if (idxFut) {
+        futBuy  = parseFloat(idxFut.buy_contracts) || null;
+        futSell = parseFloat(idxFut.sell_contracts) || null;
+        if (futBuy && futSell) futNet = futBuy - futSell;
+      }
+    }
+    setStep('s2','done');
+
+    // ── STEP 3: VIX + Nifty via NSE ──────────────────────
+    setStep('s3','active');
+    let vix = null, niftyClose = null;
+    const vixData = await tryFetch('https://www.nseindia.com/api/allIndices');
+    if (vixData?.data) {
+      const vixEntry   = vixData.data.find(d => d.indexSymbol === 'INDIA VIX');
+      const niftyEntry = vixData.data.find(d => d.indexSymbol === 'NIFTY 50');
+      if (vixEntry)   vix        = parseFloat(vixEntry.last) || null;
+      if (niftyEntry) niftyClose = parseFloat(niftyEntry.last) || null;
+    }
+    setStep('s3','done');
+
+    // ── STEP 4: Global cues via Yahoo Finance (no-CORS proxy) ──
+    setStep('s4','active');
+    let sp500Change = null, usdinr = null, crudePrice = null;
+    const yhProxy = 'https://query1.finance.yahoo.com/v8/finance/chart/';
+    const [spData, fxData, oilData] = await Promise.all([
+      tryFetch(`${yhProxy}%5EGSPC?interval=1d&range=2d`),
+      tryFetch(`${yhProxy}USDINR%3DX?interval=1d&range=2d`),
+      tryFetch(`${yhProxy}CL%3DF?interval=1d&range=2d`),
+    ]);
+    if (spData?.chart?.result?.[0]) {
+      const closes = spData.chart.result[0].indicators?.quote?.[0]?.close;
+      if (closes?.length >= 2) sp500Change = +((closes[closes.length-1] - closes[closes.length-2]) / closes[closes.length-2] * 100).toFixed(2);
+    }
+    if (fxData?.chart?.result?.[0]) {
+      const closes = fxData.chart.result[0].indicators?.quote?.[0]?.close;
+      if (closes?.length) usdinr = +closes[closes.length-1].toFixed(2);
+    }
+    if (oilData?.chart?.result?.[0]) {
+      const closes = oilData.chart.result[0].indicators?.quote?.[0]?.close;
+      if (closes?.length >= 2) crudePrice = +closes[closes.length-1].toFixed(2);
+    }
+    setStep('s4','done');
+
+    // ── STEP 5: Send all data to Claude for analysis ──────
+    setStep('s5','active');
+
+    // Build data summary to send to Claude
+    const dataSummary = `
+Indian Market Pre-Market Data for ${todayStr}:
+
+CASH SEGMENT:
+- FII Net: ${fiiCash !== null ? `₹${fiiCash} Cr` : 'Not available'}
+- DII Net: ${diiCash !== null ? `₹${diiCash} Cr` : 'Not available'}
+- Data Date: ${dataDate}
+
+INDEX FUTURES (from CDSL):
+- FII Buy Contracts: ${futBuy ?? 'Not available'}
+- FII Sell Contracts: ${futSell ?? 'Not available'}
+- Net Contracts: ${futNet ?? 'Not available'}
+
+VOLATILITY & MARKET LEVELS:
+- India VIX: ${vix ?? 'Not available'}
+- Nifty 50 Last: ${niftyClose ?? 'Not available'}
+
+GLOBAL CUES:
+- S&P 500 Change: ${sp500Change !== null ? `${sp500Change}%` : 'Not available'}
+- USD/INR: ${usdinr ?? 'Not available'}
+- Crude Oil (WTI): ${crudePrice !== null ? `$${crudePrice}` : 'Not available'}
+
+Note: PCR, Gift Nifty, OI direction not available via public API — estimate from available data.
+`;
+
+    const systemPrompt = `You are an expert Indian stock market pre-market analyst.
+You will receive raw market data fetched from live APIs.
+Analyze it and respond ONLY with a single valid JSON object. 
+No markdown fences, no explanation, no text before or after the JSON.
+Start your response with { and end with }.
+
+JSON format (use null for unavailable fields):
 {
-  "data_date": "date string",
+  "data_date": "string",
   "fii_cash_net": number_or_null,
   "dii_cash_net": number_or_null,
   "fii_futures_net_contracts": number_or_null,
-  "oi_direction": "INCREASING"|"DECREASING"|"UNKNOWN",
-  "ls_ratio": number_or_null,
-  "pcr": number_or_null,
-  "pcr_trend": "RISING"|"FALLING"|"STABLE"|"UNKNOWN",
+  "oi_direction": "INCREASING or DECREASING or UNKNOWN",
+  "pcr": null,
+  "pcr_trend": "UNKNOWN",
   "india_vix": number_or_null,
-  "vix_trend": "RISING"|"FALLING"|"STABLE"|"UNKNOWN",
+  "vix_trend": "RISING or FALLING or STABLE or UNKNOWN",
   "nifty_prev_close": number_or_null,
-  "gift_nifty": "POSITIVE"|"NEGATIVE"|"FLAT"|"UNKNOWN",
-  "gift_nifty_points": number_or_null,
-  "us_markets": "UP"|"DOWN"|"FLAT"|"UNKNOWN",
+  "gift_nifty": "POSITIVE or NEGATIVE or FLAT or UNKNOWN",
+  "gift_nifty_points": null,
+  "us_markets": "UP or DOWN or FLAT or UNKNOWN",
   "sp500_change_pct": number_or_null,
-  "rupee_trend": "STRENGTHENING"|"WEAKENING"|"STABLE"|"UNKNOWN",
+  "rupee_trend": "STRENGTHENING or WEAKENING or STABLE or UNKNOWN",
   "usdinr": number_or_null,
-  "crude_trend": "RISING"|"FALLING"|"STABLE"|"UNKNOWN",
-  "verdict": "BEARISH"|"BULLISH"|"NEUTRAL"|"CAUTIOUS",
-  "conviction": "HIGH"|"MEDIUM"|"LOW",
+  "crude_trend": "RISING or FALLING or STABLE or UNKNOWN",
+  "verdict": "BEARISH or BULLISH or NEUTRAL or CAUTIOUS",
+  "conviction": "HIGH or MEDIUM or LOW",
   "nifty_bias": "one sharp sentence on Nifty direction today",
   "expected_support": number_or_null,
   "expected_resistance": number_or_null,
-  "cash_analysis": "2-3 sentences analyzing FII vs DII cash battle",
-  "futures_analysis": "2-3 sentences on futures OI and FII positioning",
-  "options_analysis": "2-3 sentences on PCR, VIX, max pain dynamics",
-  "global_analysis": "1-2 sentences on global cues impact on India",
-  "key_risk": "the single biggest risk to watch today",
+  "cash_analysis": "2-3 sentences",
+  "futures_analysis": "2-3 sentences",
+  "options_analysis": "2-3 sentences",
+  "global_analysis": "1-2 sentences",
+  "key_risk": "single biggest risk today",
   "action_points": ["point1","point2","point3","point4"],
   "signal_scores": {
-    "cash": "BEARISH"|"BULLISH"|"NEUTRAL",
-    "futures": "BEARISH"|"BULLISH"|"NEUTRAL",
-    "options": "BEARISH"|"BULLISH"|"NEUTRAL",
-    "global": "BEARISH"|"BULLISH"|"NEUTRAL"
+    "cash": "BEARISH or BULLISH or NEUTRAL",
+    "futures": "BEARISH or BULLISH or NEUTRAL",
+    "options": "BEARISH or BULLISH or NEUTRAL",
+    "global": "BEARISH or BULLISH or NEUTRAL"
   },
-  "data_sources_found": ["source1","source2"]
+  "data_sources_found": ["NSE API","CDSL API","Yahoo Finance"]
 }`;
 
-    const userMsg = `Today is ${todayStr} (${todayISO}, IST).
-Search for and analyze the latest FII/DII market data for Indian markets.
-Find: FII net cash activity, FII futures OI change, India VIX, Nifty PCR, Gift Nifty pre-open level, US markets overnight (S&P500/Nasdaq), USDINR, crude oil.
-Use today's provisional data if available, else yesterday's confirmed data.
-Generate the complete pre-market analysis JSON now.`;
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 2000,
+        system: systemPrompt,
+        messages: [{ role: "user", content: dataSummary }]
+      })
+    });
 
-    // Step ticker for first 4 steps while searches run
-    const stepIds = ['s1','s2','s3','s4'];
-    let stepIdx = 0;
-    setStep(stepIds[0], 'active');
-    const stepTicker = setInterval(() => {
-      setStep(stepIds[stepIdx], 'done');
-      stepIdx++;
-      if (stepIdx < stepIds.length) setStep(stepIds[stepIdx], 'active');
-      else clearInterval(stepTicker);
-    }, 4000);
+    if (resp.status === 401) throw new Error('INVALID_KEY');
+    if (!resp.ok) throw new Error(`API_ERROR_${resp.status}`);
 
-    const API_HEADERS = {
-      "Content-Type": "application/json",
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true"
-    };
-    const TOOLS = [{ type: "web_search_20250305", name: "web_search" }];
+    const apiData = await resp.json();
+    const rawText = (apiData.content || []).filter(b => b.type==='text').map(b => b.text).join('');
 
-    // ── Multi-turn tool loop ──────────────────────────────
-    // Claude with web_search stops at stop_reason="tool_use" and expects
-    // tool results to be sent back. We loop until stop_reason="end_turn".
-    let messages = [{ role: "user", content: userMsg }];
-    let finalText = '';
-    let loopGuard = 0;
-
-    while (loopGuard < 8) {
-      loopGuard++;
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: API_HEADERS,
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 4000,
-          tools: TOOLS,
-          system: systemPrompt,
-          messages
-        })
-      });
-
-      if (resp.status === 401) { clearInterval(stepTicker); throw new Error('INVALID_KEY'); }
-      if (!resp.ok) { clearInterval(stepTicker); throw new Error(`API_ERROR_${resp.status}`); }
-
-      const data = await resp.json();
-      const content = data.content || [];
-
-      // Add assistant turn to messages
-      messages.push({ role: "assistant", content });
-
-      if (data.stop_reason === "end_turn") {
-        // Collect all text blocks from this final turn
-        finalText = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-        break;
-      }
-
-      if (data.stop_reason === "tool_use") {
-        // Build tool_result blocks for every tool_use block
-        const toolResults = content
-          .filter(b => b.type === 'tool_use')
-          .map(b => ({
-            type: "tool_result",
-            tool_use_id: b.id,
-            content: b.input?.query
-              ? `Search completed for: ${b.input.query}`
-              : "Search completed"
-          }));
-
-        if (toolResults.length === 0) break; // safety
-        messages.push({ role: "user", content: toolResults });
-        continue;
-      }
-
-      // Any other stop reason — grab what text we have
-      finalText = content.filter(b => b.type === 'text').map(b => b.text).join('\n');
-      break;
-    }
-
-    clearInterval(stepTicker);
-    stepIds.forEach(id => setStep(id, 'done'));
-    setStep('s5', 'active');
+    setStep('s5','done');
+    setStep('s6','active');
     await delay(300);
 
-    // ── Robust JSON extraction ────────────────────────────
-    let result = null;
-
-    const tryParse = str => {
-      try { return JSON.parse(str); } catch(e) { return null; }
-    };
-
-    // 1. Direct parse
-    result = tryParse(finalText.trim());
-
-    // 2. Strip markdown fences
+    // Parse JSON — Claude is instructed to return pure JSON
+    let result = tryParse(rawText.trim());
     if (!result) {
-      result = tryParse(finalText.replace(/```json\s*/gi,'').replace(/```\s*/g,'').trim());
+      // strip any accidental fences
+      result = tryParse(rawText.replace(/```json|```/gi,'').trim());
     }
-
-    // 3. First { to last }
     if (!result) {
-      const s = finalText.indexOf('{'), e = finalText.lastIndexOf('}');
-      if (s !== -1 && e > s) result = tryParse(finalText.substring(s, e + 1));
+      // first { to last }
+      const s = rawText.indexOf('{'), e = rawText.lastIndexOf('}');
+      if (s !== -1 && e > s) result = tryParse(rawText.substring(s, e+1));
     }
-
-    // 4. Scan all messages for JSON (in case it appeared in an earlier turn)
     if (!result) {
-      for (const msg of messages) {
-        const blocks = Array.isArray(msg.content) ? msg.content : [];
-        for (const b of blocks) {
-          if (b.type === 'text' && b.text && b.text.includes('"verdict"')) {
-            const s = b.text.indexOf('{'), e = b.text.lastIndexOf('}');
-            if (s !== -1 && e > s) {
-              result = tryParse(b.text.substring(s, e + 1));
-              if (result) break;
-            }
-          }
-        }
-        if (result) break;
-      }
-    }
-
-    if (!result) {
-      console.error('All messages:', JSON.stringify(messages, null, 2));
+      console.error('Claude raw response:', rawText);
       throw new Error('NO_JSON');
     }
 
-    setStep('s5','done'); setStep('s6','active');
-    await delay(400);
+    // Patch in any data Claude may have missed from direct fetches
+    if (fiiCash   !== null && result.fii_cash_net   === null) result.fii_cash_net   = fiiCash;
+    if (diiCash   !== null && result.dii_cash_net   === null) result.dii_cash_net   = diiCash;
+    if (vix       !== null && result.india_vix      === null) result.india_vix      = vix;
+    if (niftyClose!== null && result.nifty_prev_close===null) result.nifty_prev_close = niftyClose;
+    if (usdinr    !== null && result.usdinr         === null) result.usdinr         = usdinr;
+    if (sp500Change!==null && result.sp500_change_pct===null) result.sp500_change_pct = sp500Change;
+
     setStep('s6','done');
     await delay(300);
 
